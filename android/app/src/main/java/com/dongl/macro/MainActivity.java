@@ -27,8 +27,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
-    private static final int VERSION_CODE = 1;
-    private static final String VERSION_NAME = "1.0";
+    private static final int VERSION_CODE = 2;
+    private static final String VERSION_NAME = "1.1";
     private static final String API_BASE = "http://31.76.20.227";
     private static final String NOTEPAD_DUCKY =
             "DELAY 1000\n" +
