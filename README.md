@@ -1,71 +1,17 @@
 # Macro Controller for LilyGO T-Dongle S3
 
-Firmware and Android client for sending Ducky Script macros to a LilyGO T-Dongle S3 over Wi-Fi.
+Firmware, Android client, local web UI, and server admin panel for sending a small allowlisted macro to a LilyGO T-Dongle S3.
 
-## Network
+## Allowed Commands
 
-- SSID: `DONGL`
-- Password: `dongl1234`
-- Device IP: `172.0.0.1`
-- Web UI: `http://172.0.0.1`
-- Macro endpoint: `POST http://172.0.0.1/macro`
-- Status endpoint: `GET http://172.0.0.1/status`
+Only these commands are accepted:
 
-## Supported Commands
+- `DELAY 1000` - wait 0-5000 ms.
+- `GUI r` - open Run.
+- `STRING text` - type text up to 160 characters.
+- `ENTER` - press Enter.
 
-- `REM comment`
-- `DELAY 1000`
-- `DEFAULT_DELAY 80`
-- `DEFAULTDELAY 80`
-- `DEFAULT_CHAR_DELAY 20`
-- `DEFAULTCHARDELAY 20`
-- `STRING text`
-- `TYPE "text"`
-- `REPEAT 3`
-- `ENTER`, `TAB`, `ESC`, `BACKSPACE`, `DELETE`, `INSERT`
-- `HOME`, `END`, `PAGEUP`, `PAGEDOWN`
-- `UP`, `DOWN`, `LEFT`, `RIGHT`
-- `CAPSLOCK`, `NUMLOCK`, `PRINTSCREEN`, `SCROLLLOCK`, `PAUSE`
-- `F1` through `F24`
-- `CTRL`, `ALT`, `SHIFT`, `GUI`, `WIN`, `WINDOWS`, `COMMAND`
-- `RCTRL`, `RALT`, `RSHIFT`, `RGUI`
-- Numpad keys: `KP_0` through `KP_9`, `KP_ENTER`, `KP_PLUS`, `KP_MINUS`, `KP_SLASH`, `KP_ASTERISK`, `KP_DOT`
-
-## Structure
-
-- `firmware/` - PlatformIO firmware for ESP32-S3.
-- `android/` - Android client.
-- `scripts/` - Build and upload helper scripts.
-
-## Build Firmware
-
-From the `firmware` directory:
-
-```powershell
-pio run
-```
-
-Upload to a connected device:
-
-```powershell
-pio run --target upload
-```
-
-## Build APK
-
-From the `android` directory:
-
-```powershell
-gradle assembleDebug
-```
-
-The APK is generated at:
-
-```text
-android/app/build/outputs/apk/debug/app-debug.apk
-```
-
-## Example
+Example:
 
 ```text
 DELAY 1000
@@ -75,5 +21,42 @@ STRING notepad
 DELAY 200
 ENTER
 DELAY 1000
-STRING Hello World
+```
+
+## Blocked Commands
+
+Everything outside the allowlist is blocked, including:
+
+- `HOTKEY`, `TYPE`, `REPEAT`.
+- `TAB`, `ESC`, `BACKSPACE`, `DELETE`, `INSERT`.
+- `CTRL`, `ALT`, `SHIFT`, `WIN`, `WINDOWS`, `META`, `COMMAND`.
+- `DEFAULT_DELAY`, `DEFAULT_CHAR_DELAY`.
+- Arrow keys, `HOME`, `END`, `F1-F24`, numpad keys.
+- Text containing `cmd.exe`, `powershell`, `terminal`, `curl`, `wget`, URLs, or similar commands.
+
+## Endpoints
+
+- Local macro endpoint: `POST http://172.0.0.1/macro`
+- Cloud queue endpoint: `POST /api/macro/run` with JSON body `{"macro":"...","device_id":"optional"}`
+- Dongle polling endpoint: `GET /api/dongle/poll?device_id=...`
+- Admin page: `/admin`
+
+## Build Firmware
+
+```powershell
+cd firmware
+pio run
+```
+
+Upload:
+
+```powershell
+pio run --target upload
+```
+
+## Build APK
+
+```powershell
+cd android
+gradle assembleDebug
 ```

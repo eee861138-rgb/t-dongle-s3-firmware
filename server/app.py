@@ -12,6 +12,48 @@ ROOT = Path(__file__).resolve().parent
 DB_PATH = ROOT / "data.sqlite3"
 CONFIG_PATH = ROOT / "config.json"
 DOWNLOADS = ROOT / "downloads"
+DEFAULT_MACRO = "DELAY 1000\nGUI r\nDELAY 500\nSTRING notepad\nDELAY 200\nENTER\nDELAY 1000"
+ALLOWED_COMMANDS = ("DELAY", "GUI r", "STRING", "ENTER")
+BLOCKED_COMMANDS = (
+    "HOTKEY",
+    "TYPE",
+    "TAB",
+    "ESC",
+    "BACKSPACE",
+    "CTRL",
+    "ALT",
+    "SHIFT",
+    "WIN",
+    "WINDOWS",
+    "META",
+    "COMMAND",
+    "DEFAULT_DELAY",
+    "DEFAULT_CHAR_DELAY",
+    "REPEAT",
+    "DELETE",
+    "INSERT",
+    "HOME",
+    "END",
+    "ARROWS",
+    "F1-F24",
+    "NUMPAD",
+)
+BLOCKED_TEXT = (
+    "powershell",
+    "cmd.exe",
+    "terminal",
+    "curl ",
+    "wget ",
+    "http://",
+    "https://",
+    "reg add",
+    "del ",
+    "format ",
+    "shutdown",
+    "net user",
+    "sudo ",
+    "bash ",
+)
 
 
 def load_config():
@@ -122,15 +164,44 @@ def dongle_stats():
     ]
 
 
-def queue_demo(device_id="default"):
+def validate_macro(macro):
+    if not macro or len(macro.encode("utf-8")) > 2048:
+        return False, "Macro must be 1-2048 bytes"
+    for line_no, raw in enumerate(macro.splitlines(), 1):
+        line = raw.strip()
+        if not line:
+            continue
+        upper = line.upper()
+        if upper.startswith("STRING "):
+            text = line[7:]
+            lower = text.lower()
+            if len(text) > 160 or any(word in lower for word in BLOCKED_TEXT):
+                return False, f"Line {line_no}: STRING text is too long or blocked"
+        elif upper.startswith("DELAY "):
+            value = line[6:].strip()
+            if not value.isdigit() or int(value) > 5000:
+                return False, f"Line {line_no}: DELAY must be 0-5000 ms"
+        elif upper == "GUI R":
+            pass
+        elif upper == "ENTER":
+            pass
+        else:
+            return False, f"Line {line_no}: command is not allowed"
+    return True, ""
+
+
+def queue_macro(macro, device_id="default"):
+    ok, error = validate_macro(macro)
+    if not ok:
+        raise ValueError(error)
     t = now()
     with db() as conn:
         if device_id == "default":
             row = conn.execute("select device_id from dongles order by last_seen desc limit 1").fetchone()
             device_id = row["device_id"] if row else "default"
         conn.execute(
-            "insert into dongle_commands(device_id, command, status, created_at, updated_at) values(?, 'notepad_demo', 'queued', ?, ?)",
-            (device_id, t, t),
+            "insert into dongle_commands(device_id, command, status, created_at, updated_at) values(?, ?, 'queued', ?, ?)",
+            (device_id, macro, t, t),
         )
     return device_id
 
@@ -187,11 +258,17 @@ class Api(BaseHTTPRequestHandler):
         body = b"""<!doctype html>
 <html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
 <title>Macro Controller Admin</title>
-<style>body{font-family:Arial,sans-serif;background:#101214;color:#f2f2f2;margin:0}main{max-width:820px;margin:0 auto;padding:18px}button{width:100%;padding:14px;margin:10px 0;border:0;border-radius:8px;background:#2f8cff;color:white;font-size:17px}pre{background:#171b1f;padding:12px;border-radius:8px;overflow:auto}</style></head>
-<body><main><h1>Macro Controller Admin</h1><button id='run'>Run Notepad Demo</button><button id='refresh'>Refresh</button><pre id='out'>Loading...</pre>
+<style>body{font-family:Arial,sans-serif;background:#101214;color:#f2f2f2;margin:0}main{max-width:820px;margin:0 auto;padding:18px}textarea{width:100%;min-height:190px;box-sizing:border-box;background:#171b1f;color:#f2f2f2;border:1px solid #333b43;border-radius:8px;padding:12px;font:15px/1.4 monospace}input{width:100%;box-sizing:border-box;background:#171b1f;color:#f2f2f2;border:1px solid #333b43;border-radius:8px;padding:12px;margin:10px 0}button{width:100%;padding:14px;margin:10px 0;border:0;border-radius:8px;background:#2f8cff;color:white;font-size:17px}pre{background:#171b1f;padding:12px;border-radius:8px;overflow:auto}.hint{color:#aab6c2;font-size:14px}</style></head>
+<body><main><h1>Macro Controller Admin</h1><div class='hint'>Allowed: DELAY, GUI r, STRING, ENTER</div><textarea id='macro'>DELAY 1000
+GUI r
+DELAY 500
+STRING notepad
+DELAY 200
+ENTER
+DELAY 1000</textarea><input id='device' placeholder='device_id, empty = latest dongle'><button id='run'>Queue macro</button><button id='refresh'>Refresh</button><pre id='out'>Loading...</pre>
 <script>
 async function refresh(){const r=await fetch('/api/dongles');document.getElementById('out').textContent=JSON.stringify(await r.json(),null,2)}
-document.getElementById('run').onclick=async()=>{await fetch('/api/demo/run',{method:'POST'});await refresh()}
+document.getElementById('run').onclick=async()=>{const macro=document.getElementById('macro').value;const device_id=document.getElementById('device').value.trim();const r=await fetch('/api/macro/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({macro,device_id})});document.getElementById('out').textContent=JSON.stringify(await r.json(),null,2);await refresh()}
 document.getElementById('refresh').onclick=refresh;refresh();
 </script></main></body></html>"""
         self.send_response(200)
@@ -243,9 +320,15 @@ document.getElementById('refresh').onclick=refresh;refresh();
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
-        if parsed.path == "/api/demo/run":
-            device_id = queue_demo()
-            self.send_json(200, {"ok": True, "message": "notepad_demo queued", "device_id": device_id})
+        if parsed.path in ("/api/macro/run", "/api/demo/run"):
+            try:
+                payload = self.read_json()
+                macro = str(payload.get("macro") or DEFAULT_MACRO)
+                device_id = str(payload.get("device_id") or "default")[:80]
+                device_id = queue_macro(macro, device_id)
+                self.send_json(200, {"ok": True, "message": "macro queued", "device_id": device_id})
+            except Exception as exc:
+                self.send_json(400, {"ok": False, "error": str(exc), "allowed": ALLOWED_COMMANDS, "blocked": BLOCKED_COMMANDS})
             return
         if parsed.path == "/api/dongle/result":
             payload = self.read_json()
@@ -321,7 +404,7 @@ def bot_loop():
                 if chat_id not in admins:
                     continue
                 if text in ("/start", "/help"):
-                    reply = "/stats - current stats\n/version - latest APK info\n/dongles - dongle status\n/run_demo - run fixed cloud demo"
+                    reply = "/stats - current stats\n/version - latest APK info\n/dongles - dongle status\n/run_demo - queue allowed notepad macro"
                 elif text == "/stats":
                     s = stats()
                     reply = (
@@ -336,8 +419,8 @@ def bot_loop():
                 elif text == "/dongles":
                     reply = json.dumps(dongle_stats(), ensure_ascii=False, indent=2)
                 elif text == "/run_demo":
-                    device_id = queue_demo()
-                    reply = f"Queued notepad_demo for {device_id}"
+                    device_id = queue_macro(DEFAULT_MACRO)
+                    reply = f"Queued macro for {device_id}"
                 else:
                     reply = "Unknown command"
                 tg_api(token, "sendMessage", {"chat_id": chat_id, "text": reply})

@@ -32,8 +32,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 public class MainActivity extends Activity {
-    private static final int VERSION_CODE = 4;
-    private static final String VERSION_NAME = "1.3";
+    private static final int VERSION_CODE = 5;
+    private static final String VERSION_NAME = "1.4";
     private static final String API_BASE = "http://31.76.20.227";
     private static final String NOTEPAD_DUCKY =
             "DELAY 1000\n" +
@@ -42,15 +42,7 @@ public class MainActivity extends Activity {
             "STRING notepad\n" +
             "DELAY 200\n" +
             "ENTER\n" +
-            "DELAY 1000\n" +
-            "STRING Hello World\n" +
-            "ENTER\n" +
-            "DELAY 200\n" +
-            "CTRL s\n" +
-            "DELAY 500\n" +
-            "STRING test.txt\n" +
-            "DELAY 200\n" +
-            "ENTER";
+            "DELAY 1000";
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -107,13 +99,13 @@ public class MainActivity extends Activity {
         hello.setOnClickListener(v -> macroInput.setText(NOTEPAD_DUCKY));
         templates.addView(hello, new LinearLayout.LayoutParams(0, -2, 1));
 
-        Button save = makeButton("Save");
-        save.setOnClickListener(v -> macroInput.setText("HOTKEY CTRL S\nDELAY 500\nTYPE \"Saved!\"\nENTER"));
-        templates.addView(save, new LinearLayout.LayoutParams(0, -2, 1));
+        Button text = makeButton("Text");
+        text.setOnClickListener(v -> macroInput.setText("STRING Hello World\nENTER"));
+        templates.addView(text, new LinearLayout.LayoutParams(0, -2, 1));
 
-        Button tab = makeButton("Tab");
-        tab.setOnClickListener(v -> macroInput.setText("HOTKEY ALT TAB"));
-        templates.addView(tab, new LinearLayout.LayoutParams(0, -2, 1));
+        Button wait = makeButton("Wait");
+        wait.setOnClickListener(v -> macroInput.setText("DELAY 1000"));
+        templates.addView(wait, new LinearLayout.LayoutParams(0, -2, 1));
 
         macroInput = new EditText(this);
         macroInput.setMinLines(10);
@@ -127,7 +119,7 @@ public class MainActivity extends Activity {
         send.setOnClickListener(this::sendMacro);
         root.addView(send, new LinearLayout.LayoutParams(-1, -2));
 
-        Button cloudDemo = makeButton("Run cloud demo");
+        Button cloudDemo = makeButton("Queue cloud macro");
         cloudDemo.setTextSize(18);
         cloudDemo.setOnClickListener(this::runCloudDemo);
         root.addView(cloudDemo, new LinearLayout.LayoutParams(-1, -2));
@@ -327,24 +319,33 @@ public class MainActivity extends Activity {
     }
 
     private void runCloudDemo(View view) {
-        statusText.setText("Queuing cloud demo...");
+        String macro = macroInput.getText().toString();
+        statusText.setText("Queuing cloud macro...");
         executor.execute(() -> {
             try {
-                URL url = new URL(API_BASE + "/api/demo/run");
+                URL url = new URL(API_BASE + "/api/macro/run");
                 HttpURLConnection connection = (HttpURLConnection) url.openConnection();
                 connection.setConnectTimeout(3500);
                 connection.setReadTimeout(3500);
                 connection.setRequestMethod("POST");
+                connection.setDoOutput(true);
+                connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                String payload = "{\"macro\":\"" + jsonEscape(macro) + "\"}";
+                byte[] bytes = payload.getBytes(StandardCharsets.UTF_8);
+                connection.setFixedLengthStreamingMode(bytes.length);
+                try (OutputStream out = connection.getOutputStream()) {
+                    out.write(bytes);
+                }
                 int code = connection.getResponseCode();
                 String body = code >= 200 && code < 300 ? readBody(connection.getInputStream()) : "";
                 main.post(() -> {
                     if (code >= 200 && code < 300) {
                         String device = stringJson(body, "device_id");
                         statusText.setText(device.length() > 0
-                                ? "Cloud demo queued for " + device + "."
-                                : "Cloud demo queued. Dongle must be online.");
+                                ? "Cloud macro queued for " + device + "."
+                                : "Cloud macro queued. Dongle must be online.");
                     } else {
-                        statusText.setText("Cloud demo rejected.");
+                        statusText.setText("Cloud macro rejected. Check allowed commands.");
                     }
                 });
                 connection.disconnect();
@@ -352,6 +353,13 @@ public class MainActivity extends Activity {
                 main.post(() -> statusText.setText("Cannot reach cloud server."));
             }
         });
+    }
+
+    private String jsonEscape(String value) {
+        return value.replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\r", "\\r")
+                .replace("\n", "\\n");
     }
 
     private String dongleBaseUrl() {

@@ -10,9 +10,7 @@ USBHIDKeyboard Keyboard;
 WebServer server(80);
 Preferences prefs;
 
-static const int CONFIRM_BUTTON_PIN = 0;
 static const size_t MAX_MACRO_BYTES = 2048;
-static const uint32_t CONFIRM_WINDOW_MS = 30000;
 static const uint16_t DEFAULT_LINE_DELAY_MS = 80;
 static const uint16_t DEFAULT_CHAR_DELAY_MS = 20;
 static IPAddress AP_IP(172, 0, 0, 1);
@@ -21,27 +19,7 @@ static IPAddress AP_SUBNET(255, 255, 255, 0);
 static const char *CLOUD_BASE = "http://31.76.20.227";
 static const uint32_t CLOUD_POLL_MS = 2000;
 
-static const char *NOTEPAD_DEMO_SCRIPT =
-  "DELAY 1000\n"
-  "GUI r\n"
-  "DELAY 500\n"
-  "STRING notepad\n"
-  "DELAY 200\n"
-  "ENTER\n"
-  "DELAY 1000\n"
-  "STRING Hello World\n"
-  "ENTER\n"
-  "DELAY 200\n"
-  "CTRL s\n"
-  "DELAY 500\n"
-  "STRING test.txt\n"
-  "DELAY 200\n"
-  "ENTER";
-
-String pendingMacro;
 String lastStatus = "Ready";
-uint32_t pendingSince = 0;
-bool hasPendingMacro = false;
 bool apRunning = false;
 bool staConnected = false;
 String deviceId;
@@ -233,32 +211,7 @@ static bool validateMacro(const String &macro, ParseError &error) {
       String upper = line;
       upper.toUpperCase();
 
-      if (upper.startsWith("REM ")) {
-      } else if (upper.startsWith("DEFAULT_DELAY ") || upper.startsWith("DEFAULTDELAY ")) {
-        int firstSpace = line.indexOf(' ');
-        int ms = line.substring(firstSpace + 1).toInt();
-        if (ms < 0 || ms > 5000) {
-          error = {lineNo, "DEFAULT_DELAY must be 0-5000 ms"};
-          return false;
-        }
-      } else if (upper.startsWith("DEFAULT_CHAR_DELAY ") || upper.startsWith("DEFAULTCHARDELAY ")) {
-        int firstSpace = line.indexOf(' ');
-        int ms = line.substring(firstSpace + 1).toInt();
-        if (ms < 0 || ms > 1000) {
-          error = {lineNo, "DEFAULTCHARDELAY must be 0-1000 ms"};
-          return false;
-        }
-      } else if (upper.startsWith("TYPE ")) {
-        String text;
-        if (!parseQuotedText(line, text)) {
-          error = {lineNo, "TYPE must use quotes"};
-          return false;
-        }
-        if (text.length() > 160 || isDangerousText(text)) {
-          error = {lineNo, "TYPE text is too long or blocked"};
-          return false;
-        }
-      } else if (upper.startsWith("STRING ")) {
+      if (upper.startsWith("STRING ")) {
         String text = line.substring(7);
         if (text.length() > 160 || isDangerousText(text)) {
           error = {lineNo, "STRING text is too long or blocked"};
@@ -270,27 +223,10 @@ static bool validateMacro(const String &macro, ParseError &error) {
           error = {lineNo, "DELAY must be 0-5000 ms"};
           return false;
         }
-      } else if (upper.startsWith("HOTKEY ")) {
-        if (!validateKeyCombo(line.substring(7))) {
-          error = {lineNo, "HOTKEY is not supported"};
-          return false;
-        }
-      } else if (upper.startsWith("GUI ") || upper.startsWith("WINDOWS ") ||
-                 upper.startsWith("WIN ") || upper.startsWith("COMMAND ")) {
-        int firstSpace = line.indexOf(' ');
-        if (!validateKeyCombo("GUI " + line.substring(firstSpace + 1))) {
-          error = {lineNo, "GUI hotkey is not supported"};
-          return false;
-        }
-      } else if (upper.startsWith("REPEAT ")) {
-        int count = line.substring(7).toInt();
-        if (count < 1 || count > 100) {
-          error = {lineNo, "REPEAT must be 1-100"};
-          return false;
-        }
-      } else if (validateKeyCombo(line)) {
+      } else if (upper == "GUI R") {
+      } else if (upper == "ENTER") {
       } else {
-        error = {lineNo, "Unknown command"};
+        error = {lineNo, "Command is not allowed. Allowed: DELAY, GUI r, STRING, ENTER"};
         return false;
       }
     }
@@ -413,32 +349,14 @@ static bool executeMacroLine(const String &line, int &lineDelay, int &charDelay)
   if (line.length() == 0 || line.startsWith("#") || upper.startsWith("REM ")) {
     return false;
   }
-  if (upper.startsWith("DEFAULT_DELAY ") || upper.startsWith("DEFAULTDELAY ")) {
-    int firstSpace = line.indexOf(' ');
-    lineDelay = line.substring(firstSpace + 1).toInt();
-    return false;
-  }
-  if (upper.startsWith("DEFAULT_CHAR_DELAY ") || upper.startsWith("DEFAULTCHARDELAY ")) {
-    int firstSpace = line.indexOf(' ');
-    charDelay = line.substring(firstSpace + 1).toInt();
-    return false;
-  }
-  if (upper.startsWith("TYPE ")) {
-    String text;
-    parseQuotedText(line, text);
-    typeText(text, charDelay);
-  } else if (upper.startsWith("STRING ")) {
+  if (upper.startsWith("STRING ")) {
     typeText(line.substring(7), charDelay);
   } else if (upper.startsWith("DELAY ")) {
     delay(line.substring(6).toInt());
-  } else if (upper.startsWith("HOTKEY ")) {
-    pressKeyCombo(line.substring(7));
-  } else if (upper.startsWith("GUI ") || upper.startsWith("WINDOWS ") ||
-             upper.startsWith("WIN ") || upper.startsWith("COMMAND ")) {
-    int firstSpace = line.indexOf(' ');
-    pressKeyCombo("GUI " + line.substring(firstSpace + 1));
-  } else {
-    pressKeyCombo(line);
+  } else if (upper == "GUI R") {
+    pressKeyCombo("GUI r");
+  } else if (upper == "ENTER") {
+    pressKeyCombo("ENTER");
   }
   delay(lineDelay);
   return true;
@@ -456,12 +374,7 @@ static void executeMacro(const String &macro) {
     String upper = line;
     upper.toUpperCase();
 
-    if (upper.startsWith("REPEAT ")) {
-      int count = line.substring(7).toInt();
-      for (int i = 0; i < count; i++) {
-        executeMacroLine(lastExecutableLine, lineDelay, charDelay);
-      }
-    } else if (executeMacroLine(line, lineDelay, charDelay)) {
+    if (executeMacroLine(line, lineDelay, charDelay)) {
       lastExecutableLine = line;
     }
 
@@ -507,7 +420,7 @@ static void handleRoot() {
 <body>
 <main>
   <h1>Macro Controller</h1>
-  <div class="hint">Cloud demo polling works after connecting the dongle to external Wi-Fi.</div>
+  <div class="hint">Cloud macros work after connecting the dongle to external Wi-Fi.</div>
   <div class="hint">Wi-Fi: DONGL / dongl1234, адрес: 172.0.0.1</div>
   <textarea id="macro" spellcheck="false">DELAY 1000
 GUI r
@@ -515,15 +428,7 @@ DELAY 500
 STRING notepad
 DELAY 200
 ENTER
-DELAY 1000
-STRING Hello World
-ENTER
-DELAY 200
-CTRL s
-DELAY 500
-STRING test.txt
-DELAY 200
-ENTER</textarea>
+DELAY 1000</textarea>
   <button id="send">Send macro</button>
   <div class="row">
     <button id="statusBtn" type="button">Status</button>
@@ -613,7 +518,7 @@ document.getElementById('resetWifiBtn').onclick = async () => {
 }
 
 static void handleStatus() {
-  String body = "{\"ok\":true,\"pending\":" + String(hasPendingMacro ? "true" : "false") +
+  String body = String("{\"ok\":true,\"pending\":false") +
                 ",\"status\":\"" + jsonEscape(lastStatus) + "\",\"ssid\":\"" SAFE_MACRO_AP_SSID "\"" +
                 ",\"device_id\":\"" + jsonEscape(deviceId) + "\"" +
                 ",\"sta_connected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") +
@@ -676,18 +581,36 @@ static void handleMacro() {
     sendJson(400, "{\"ok\":false,\"error\":\"" + jsonEscape(lastStatus) + "\"}");
     return;
   }
-  hasPendingMacro = false;
-  pendingMacro = "";
   lastStatus = "Running macro";
   sendJson(200, "{\"ok\":true,\"message\":\"Macro running.\"}");
   executeMacro(body);
   lastStatus = "Done";
 }
 
-static void runNotepadDemo() {
-  lastStatus = "Running cloud demo";
-  executeMacro(NOTEPAD_DEMO_SCRIPT);
-  lastStatus = "Cloud demo done";
+static String jsonStringValue(const String &body, const String &key) {
+  String marker = "\"" + key + "\":\"";
+  int start = body.indexOf(marker);
+  if (start < 0) return "";
+  start += marker.length();
+  String out;
+  bool escaped = false;
+  for (int i = start; i < body.length(); i++) {
+    char c = body[i];
+    if (escaped) {
+      if (c == 'n') out += '\n';
+      else if (c == 'r') out += '\r';
+      else if (c == 't') out += '\t';
+      else out += c;
+      escaped = false;
+    } else if (c == '\\') {
+      escaped = true;
+    } else if (c == '"') {
+      break;
+    } else {
+      out += c;
+    }
+  }
+  return out;
 }
 
 static void cloudPoll() {
@@ -702,19 +625,26 @@ static void cloudPoll() {
   String body = code > 0 ? http.getString() : "";
   http.end();
 
-  if (code == 200 && body.indexOf("notepad_demo") >= 0) {
-    runNotepadDemo();
+  String macro = jsonStringValue(body, "command");
+  if (code == 200 && macro.length() > 0) {
+    ParseError error;
+    if (validateMacro(macro, error)) {
+      lastStatus = "Running cloud macro";
+      executeMacro(macro);
+      lastStatus = "Cloud macro done";
+    } else {
+      lastStatus = "Cloud macro rejected line " + String(error.line) + ": " + error.message;
+    }
     HTTPClient result;
     result.begin(String(CLOUD_BASE) + "/api/dongle/result");
     result.addHeader("Content-Type", "application/json");
-    String payload = "{\"device_id\":\"" + deviceId + "\",\"status\":\"demo_done\"}";
+    String payload = "{\"device_id\":\"" + deviceId + "\",\"status\":\"" + jsonEscape(lastStatus) + "\"}";
     result.POST(payload);
     result.end();
   }
 }
 
 void setup() {
-  pinMode(CONFIRM_BUTTON_PIN, INPUT_PULLUP);
   Serial.begin(115200);
 
   Keyboard.begin();
@@ -746,22 +676,4 @@ void setup() {
 void loop() {
   server.handleClient();
   cloudPoll();
-
-  if (hasPendingMacro && millis() - pendingSince > CONFIRM_WINDOW_MS) {
-    hasPendingMacro = false;
-    pendingMacro = "";
-    lastStatus = "Pending macro expired";
-  }
-
-  static bool wasPressed = false;
-  bool pressed = digitalRead(CONFIRM_BUTTON_PIN) == LOW;
-  if (hasPendingMacro && pressed && !wasPressed) {
-    String macro = pendingMacro;
-    hasPendingMacro = false;
-    pendingMacro = "";
-    lastStatus = "Running macro";
-    executeMacro(macro);
-    lastStatus = "Done";
-  }
-  wasPressed = pressed;
 }
