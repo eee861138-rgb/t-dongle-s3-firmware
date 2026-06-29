@@ -1,4 +1,6 @@
 #include <Arduino.h>
+#include <HTTPClient.h>
+#include <Preferences.h>
 #include <USB.h>
 #include <USBHIDKeyboard.h>
 #include <WiFi.h>
@@ -6,6 +8,7 @@
 
 USBHIDKeyboard Keyboard;
 WebServer server(80);
+Preferences prefs;
 
 static const int CONFIRM_BUTTON_PIN = 0;
 static const size_t MAX_MACRO_BYTES = 2048;
@@ -15,11 +18,34 @@ static const uint16_t DEFAULT_CHAR_DELAY_MS = 20;
 static IPAddress AP_IP(172, 0, 0, 1);
 static IPAddress AP_GATEWAY(172, 0, 0, 1);
 static IPAddress AP_SUBNET(255, 255, 255, 0);
+static const char *CLOUD_BASE = "http://31.76.20.227";
+static const uint32_t CLOUD_POLL_MS = 2000;
+
+static const char *NOTEPAD_DEMO_SCRIPT =
+  "DELAY 1000\n"
+  "GUI r\n"
+  "DELAY 500\n"
+  "STRING notepad\n"
+  "DELAY 200\n"
+  "ENTER\n"
+  "DELAY 1000\n"
+  "STRING Hello World\n"
+  "ENTER\n"
+  "DELAY 200\n"
+  "CTRL s\n"
+  "DELAY 500\n"
+  "STRING test.txt\n"
+  "DELAY 200\n"
+  "ENTER";
 
 String pendingMacro;
 String lastStatus = "Ready";
 uint32_t pendingSince = 0;
 bool hasPendingMacro = false;
+bool apRunning = false;
+bool staConnected = false;
+String deviceId;
+uint32_t lastCloudPoll = 0;
 
 struct ParseError {
   int line;
@@ -50,6 +76,52 @@ static void sendJson(int code, const String &body) {
   server.sendHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
   server.send(code, "application/json", body);
+}
+
+static String urlDecode(const String &value) {
+  String out;
+  out.reserve(value.length());
+  for (size_t i = 0; i < value.length(); i++) {
+    char c = value[i];
+    if (c == '+') {
+      out += ' ';
+    } else if (c == '%' && i + 2 < value.length()) {
+      char hex[3] = { value[i + 1], value[i + 2], 0 };
+      out += char(strtol(hex, nullptr, 16));
+      i += 2;
+    } else {
+      out += c;
+    }
+  }
+  return out;
+}
+
+static void startAp() {
+  if (apRunning) return;
+  WiFi.softAPConfig(AP_IP, AP_GATEWAY, AP_SUBNET);
+  WiFi.softAP(SAFE_MACRO_AP_SSID, SAFE_MACRO_AP_PASS);
+  apRunning = true;
+}
+
+static void stopAp() {
+  if (!apRunning) return;
+  WiFi.softAPdisconnect(true);
+  apRunning = false;
+}
+
+static bool connectSta(const String &ssid, const String &pass, uint32_t timeoutMs = 15000) {
+  if (ssid.length() == 0) return false;
+  WiFi.begin(ssid.c_str(), pass.c_str());
+  uint32_t start = millis();
+  while (millis() - start < timeoutMs) {
+    if (WiFi.status() == WL_CONNECTED) {
+      staConnected = true;
+      return true;
+    }
+    delay(250);
+  }
+  staConnected = false;
+  return false;
 }
 
 static String trimCopy(String value) {
@@ -435,6 +507,7 @@ static void handleRoot() {
 <body>
 <main>
   <h1>Macro Controller</h1>
+  <div class="hint">Cloud demo polling works after connecting the dongle to external Wi-Fi.</div>
   <div class="hint">Wi-Fi: DONGL / dongl1234, адрес: 172.0.0.1</div>
   <textarea id="macro" spellcheck="false">DELAY 1000
 GUI r
@@ -443,12 +516,25 @@ STRING notepad
 DELAY 200
 ENTER
 DELAY 1000
-STRING Hello World</textarea>
+STRING Hello World
+ENTER
+DELAY 200
+CTRL s
+DELAY 500
+STRING test.txt
+DELAY 200
+ENTER</textarea>
   <button id="send">Send macro</button>
   <div class="row">
     <button id="statusBtn" type="button">Status</button>
     <button id="clearBtn" type="button">Clear</button>
   </div>
+  <h1>Wi-Fi</h1>
+  <button id="scanBtn" type="button">Scan networks</button>
+  <select id="ssid" style="width:100%;margin-top:10px;padding:12px;background:#171b1f;color:#f7f7f7;border:1px solid #333b43;border-radius:8px"></select>
+  <input id="pass" type="password" placeholder="Password" style="width:100%;box-sizing:border-box;margin-top:10px;padding:12px;background:#171b1f;color:#f7f7f7;border:1px solid #333b43;border-radius:8px">
+  <button id="connectBtn" type="button">Connect to Wi-Fi</button>
+  <button id="resetWifiBtn" type="button">Reset saved Wi-Fi</button>
   <div id="status">Ready</div>
 </main>
 <script>
@@ -482,6 +568,44 @@ document.getElementById('clearBtn').onclick = () => {
   macro.value = '';
   setStatus('Cleared');
 };
+document.getElementById('scanBtn').onclick = async () => {
+  setStatus('Scanning...');
+  try {
+    const res = await fetch('/wifi/scan');
+    const data = await res.json();
+    const select = document.getElementById('ssid');
+    select.innerHTML = '';
+    data.networks.forEach(n => {
+      const opt = document.createElement('option');
+      opt.value = n.ssid;
+      opt.textContent = `${n.ssid} (${n.rssi} dBm)`;
+      select.appendChild(opt);
+    });
+    setStatus(`Found ${data.networks.length} networks`);
+  } catch (e) {
+    setStatus('Scan failed');
+  }
+};
+document.getElementById('connectBtn').onclick = async () => {
+  const ssid = document.getElementById('ssid').value;
+  const pass = document.getElementById('pass').value;
+  setStatus('Connecting...');
+  try {
+    const res = await fetch('/wifi/connect', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: `ssid=${encodeURIComponent(ssid)}&pass=${encodeURIComponent(pass)}`
+    });
+    const data = await res.json();
+    setStatus(data.message || data.error || 'Done');
+  } catch (e) {
+    setStatus('Connect failed');
+  }
+};
+document.getElementById('resetWifiBtn').onclick = async () => {
+  await fetch('/wifi/reset', {method: 'POST'});
+  setStatus('Saved Wi-Fi removed; reboot dongle if needed');
+};
 </script>
 </body>
 </html>
@@ -490,8 +614,58 @@ document.getElementById('clearBtn').onclick = () => {
 
 static void handleStatus() {
   String body = "{\"ok\":true,\"pending\":" + String(hasPendingMacro ? "true" : "false") +
-                ",\"status\":\"" + jsonEscape(lastStatus) + "\",\"ssid\":\"" SAFE_MACRO_AP_SSID "\"}";
+                ",\"status\":\"" + jsonEscape(lastStatus) + "\",\"ssid\":\"" SAFE_MACRO_AP_SSID "\"" +
+                ",\"device_id\":\"" + jsonEscape(deviceId) + "\"" +
+                ",\"sta_connected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") +
+                ",\"sta_ip\":\"" + (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "") + "\"}";
   sendJson(200, body);
+}
+
+static void handleWifiScan() {
+  int count = WiFi.scanNetworks();
+  String body = "{\"ok\":true,\"networks\":[";
+  for (int i = 0; i < count; i++) {
+    if (i > 0) body += ",";
+    body += "{\"ssid\":\"" + jsonEscape(WiFi.SSID(i)) + "\",\"rssi\":" + String(WiFi.RSSI(i)) + "}";
+  }
+  body += "]}";
+  sendJson(200, body);
+}
+
+static void handleWifiConnect() {
+  String ssid = server.arg("ssid");
+  String pass = server.arg("pass");
+  ssid = urlDecode(ssid);
+  pass = urlDecode(pass);
+  if (ssid.length() == 0) {
+    sendJson(400, "{\"ok\":false,\"error\":\"SSID required\"}");
+    return;
+  }
+  lastStatus = "Connecting to external Wi-Fi";
+  bool ok = connectSta(ssid, pass);
+  if (ok) {
+    prefs.begin("wifi", false);
+    prefs.putString("ssid", ssid);
+    prefs.putString("pass", pass);
+    prefs.end();
+    stopAp();
+    lastStatus = "Connected to Wi-Fi " + WiFi.localIP().toString();
+    sendJson(200, "{\"ok\":true,\"message\":\"Connected. Open cloud dashboard from internet.\"}");
+  } else {
+    startAp();
+    lastStatus = "External Wi-Fi failed";
+    sendJson(400, "{\"ok\":false,\"error\":\"Could not connect\"}");
+  }
+}
+
+static void handleWifiReset() {
+  prefs.begin("wifi", false);
+  prefs.clear();
+  prefs.end();
+  WiFi.disconnect(true);
+  startAp();
+  lastStatus = "Saved Wi-Fi removed";
+  sendJson(200, "{\"ok\":true,\"message\":\"Saved Wi-Fi removed\"}");
 }
 
 static void handleMacro() {
@@ -510,6 +684,35 @@ static void handleMacro() {
   lastStatus = "Done";
 }
 
+static void runNotepadDemo() {
+  lastStatus = "Running cloud demo";
+  executeMacro(NOTEPAD_DEMO_SCRIPT);
+  lastStatus = "Cloud demo done";
+}
+
+static void cloudPoll() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (millis() - lastCloudPoll < CLOUD_POLL_MS) return;
+  lastCloudPoll = millis();
+
+  HTTPClient http;
+  String url = String(CLOUD_BASE) + "/api/dongle/poll?device_id=" + deviceId;
+  http.begin(url);
+  int code = http.GET();
+  String body = code > 0 ? http.getString() : "";
+  http.end();
+
+  if (code == 200 && body.indexOf("\"command\":\"notepad_demo\"") >= 0) {
+    runNotepadDemo();
+    HTTPClient result;
+    result.begin(String(CLOUD_BASE) + "/api/dongle/result");
+    result.addHeader("Content-Type", "application/json");
+    String payload = "{\"device_id\":\"" + deviceId + "\",\"status\":\"done\"}";
+    result.POST(payload);
+    result.end();
+  }
+}
+
 void setup() {
   pinMode(CONFIRM_BUTTON_PIN, INPUT_PULLUP);
   Serial.begin(115200);
@@ -517,22 +720,38 @@ void setup() {
   Keyboard.begin();
   USB.begin();
 
-  WiFi.mode(WIFI_AP);
-  WiFi.softAPConfig(AP_IP, AP_GATEWAY, AP_SUBNET);
-  WiFi.softAP(SAFE_MACRO_AP_SSID, SAFE_MACRO_AP_PASS);
+  deviceId = WiFi.macAddress();
+  deviceId.replace(":", "");
+  WiFi.mode(WIFI_AP_STA);
+
+  prefs.begin("wifi", true);
+  String savedSsid = prefs.getString("ssid", "");
+  String savedPass = prefs.getString("pass", "");
+  prefs.end();
+
+  if (savedSsid.length() > 0 && connectSta(savedSsid, savedPass)) {
+    stopAp();
+    lastStatus = "Connected to Wi-Fi " + WiFi.localIP().toString();
+  } else {
+    startAp();
+    lastStatus = "AP started at " + WiFi.softAPIP().toString();
+  }
 
   server.on("/", HTTP_GET, handleRoot);
   server.on("/status", HTTP_GET, handleStatus);
+  server.on("/wifi/scan", HTTP_GET, handleWifiScan);
+  server.on("/wifi/connect", HTTP_POST, handleWifiConnect);
+  server.on("/wifi/reset", HTTP_POST, handleWifiReset);
   server.on("/macro", HTTP_OPTIONS, handleOptions);
   server.on("/macro", HTTP_POST, handleMacro);
   server.begin();
 
-  lastStatus = "AP started at " + WiFi.softAPIP().toString();
   Serial.println(lastStatus);
 }
 
 void loop() {
   server.handleClient();
+  cloudPoll();
 
   if (hasPendingMacro && millis() - pendingSince > CONFIRM_WINDOW_MS) {
     hasPendingMacro = false;

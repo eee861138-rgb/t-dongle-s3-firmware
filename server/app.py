@@ -57,6 +57,28 @@ def init_db():
             )
             """
         )
+        conn.execute(
+            """
+            create table if not exists dongles (
+              device_id text primary key,
+              first_seen integer not null,
+              last_seen integer not null,
+              last_status text
+            )
+            """
+        )
+        conn.execute(
+            """
+            create table if not exists dongle_commands (
+              id integer primary key autoincrement,
+              device_id text not null,
+              command text not null,
+              status text not null,
+              created_at integer not null,
+              updated_at integer not null
+            )
+            """
+        )
 
 
 def now():
@@ -81,6 +103,36 @@ def stats():
         "opens_today": opens_today,
         "versions": {row["app_version_name"]: row["c"] for row in versions},
     }
+
+
+def dongle_stats():
+    cutoff = now() - 10
+    with db() as conn:
+        rows = conn.execute(
+            "select device_id, first_seen, last_seen, last_status from dongles order by last_seen desc"
+        ).fetchall()
+    return [
+        {
+            "device_id": row["device_id"],
+            "online": row["last_seen"] >= cutoff,
+            "last_seen": row["last_seen"],
+            "last_status": row["last_status"] or "",
+        }
+        for row in rows
+    ]
+
+
+def queue_demo(device_id="default"):
+    t = now()
+    with db() as conn:
+        if device_id == "default":
+            row = conn.execute("select device_id from dongles order by last_seen desc limit 1").fetchone()
+            device_id = row["device_id"] if row else "default"
+        conn.execute(
+            "insert into dongle_commands(device_id, command, status, created_at, updated_at) values(?, 'notepad_demo', 'queued', ?, ?)",
+            (device_id, t, t),
+        )
+    return device_id
 
 
 class Api(BaseHTTPRequestHandler):
@@ -120,10 +172,60 @@ class Api(BaseHTTPRequestHandler):
             )
         elif parsed.path == "/api/stats":
             self.send_json(200, stats())
+        elif parsed.path == "/api/dongles":
+            self.send_json(200, {"ok": True, "dongles": dongle_stats()})
+        elif parsed.path == "/api/dongle/poll":
+            self.handle_dongle_poll(parsed)
+        elif parsed.path == "/admin":
+            self.serve_admin()
         elif parsed.path.startswith("/downloads/"):
             self.serve_download(parsed.path.removeprefix("/downloads/"))
         else:
             self.send_json(200, {"ok": True})
+
+    def serve_admin(self):
+        body = b"""<!doctype html>
+<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>Macro Controller Admin</title>
+<style>body{font-family:Arial,sans-serif;background:#101214;color:#f2f2f2;margin:0}main{max-width:820px;margin:0 auto;padding:18px}button{width:100%;padding:14px;margin:10px 0;border:0;border-radius:8px;background:#2f8cff;color:white;font-size:17px}pre{background:#171b1f;padding:12px;border-radius:8px;overflow:auto}</style></head>
+<body><main><h1>Macro Controller Admin</h1><button id='run'>Run Notepad Demo</button><button id='refresh'>Refresh</button><pre id='out'>Loading...</pre>
+<script>
+async function refresh(){const r=await fetch('/api/dongles');document.getElementById('out').textContent=JSON.stringify(await r.json(),null,2)}
+document.getElementById('run').onclick=async()=>{await fetch('/api/demo/run',{method:'POST'});await refresh()}
+document.getElementById('refresh').onclick=refresh;refresh();
+</script></main></body></html>"""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def handle_dongle_poll(self, parsed):
+        qs = urllib.parse.parse_qs(parsed.query)
+        device_id = (qs.get("device_id", [""])[0] or "unknown")[:80]
+        t = now()
+        with db() as conn:
+            exists = conn.execute("select 1 from dongles where device_id = ?", (device_id,)).fetchone()
+            if exists:
+                conn.execute("update dongles set last_seen = ? where device_id = ?", (t, device_id))
+            else:
+                conn.execute(
+                    "insert into dongles(device_id, first_seen, last_seen, last_status) values(?, ?, ?, '')",
+                    (device_id, t, t),
+                )
+            cmd = conn.execute(
+                """
+                select id, command from dongle_commands
+                where status = 'queued' and (device_id = ? or device_id = 'default')
+                order by id asc limit 1
+                """,
+                (device_id,),
+            ).fetchone()
+            if cmd:
+                conn.execute("update dongle_commands set status = 'sent', updated_at = ? where id = ?", (t, cmd["id"]))
+                self.send_json(200, {"ok": True, "id": cmd["id"], "command": cmd["command"]})
+            else:
+                self.send_json(200, {"ok": True, "command": ""})
 
     def serve_download(self, name):
         safe_name = Path(name).name
@@ -141,6 +243,18 @@ class Api(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/demo/run":
+            queue_demo()
+            self.send_json(200, {"ok": True, "message": "notepad_demo queued"})
+            return
+        if parsed.path == "/api/dongle/result":
+            payload = self.read_json()
+            device_id = str(payload.get("device_id", ""))[:80]
+            status = str(payload.get("status", ""))[:80]
+            with db() as conn:
+                conn.execute("update dongles set last_status = ?, last_seen = ? where device_id = ?", (status, now(), device_id))
+            self.send_json(200, {"ok": True})
+            return
         if parsed.path not in ("/api/register", "/api/heartbeat"):
             self.send_json(404, {"error": "not found"})
             return
@@ -207,7 +321,7 @@ def bot_loop():
                 if chat_id not in admins:
                     continue
                 if text in ("/start", "/help"):
-                    reply = "/stats - current stats\n/version - latest APK info"
+                    reply = "/stats - current stats\n/version - latest APK info\n/dongles - dongle status\n/run_demo - run fixed cloud demo"
                 elif text == "/stats":
                     s = stats()
                     reply = (
@@ -219,6 +333,11 @@ def bot_loop():
                 elif text == "/version":
                     c = load_config()
                     reply = f"{c['latest_version_name']} ({c['latest_version_code']})\n{c['apk_url']}"
+                elif text == "/dongles":
+                    reply = json.dumps(dongle_stats(), ensure_ascii=False, indent=2)
+                elif text == "/run_demo":
+                    device_id = queue_demo()
+                    reply = f"Queued notepad_demo for {device_id}"
                 else:
                     reply = "Unknown command"
                 tg_api(token, "sendMessage", {"chat_id": chat_id, "text": reply})

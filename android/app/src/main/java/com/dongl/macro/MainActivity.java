@@ -27,8 +27,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
-    private static final int VERSION_CODE = 2;
-    private static final String VERSION_NAME = "1.1";
+    private static final int VERSION_CODE = 3;
+    private static final String VERSION_NAME = "1.2";
     private static final String API_BASE = "http://31.76.20.227";
     private static final String NOTEPAD_DUCKY =
             "DELAY 1000\n" +
@@ -38,7 +38,14 @@ public class MainActivity extends Activity {
             "DELAY 200\n" +
             "ENTER\n" +
             "DELAY 1000\n" +
-            "STRING Hello World";
+            "STRING Hello World\n" +
+            "ENTER\n" +
+            "DELAY 200\n" +
+            "CTRL s\n" +
+            "DELAY 500\n" +
+            "STRING test.txt\n" +
+            "DELAY 200\n" +
+            "ENTER";
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -112,6 +119,11 @@ public class MainActivity extends Activity {
         send.setTextSize(18);
         send.setOnClickListener(this::sendMacro);
         root.addView(send, new LinearLayout.LayoutParams(-1, -2));
+
+        Button cloudDemo = makeButton("Run cloud demo");
+        cloudDemo.setTextSize(18);
+        cloudDemo.setOnClickListener(this::runCloudDemo);
+        root.addView(cloudDemo, new LinearLayout.LayoutParams(-1, -2));
 
         ScrollView scroll = new ScrollView(this);
         scroll.addView(root);
@@ -269,6 +281,30 @@ public class MainActivity extends Activity {
                 connection.disconnect();
             } catch (Exception ex) {
                 main.post(() -> statusText.setText("Cannot reach dongle. Join Wi-Fi DONGL first."));
+            }
+        });
+    }
+
+    private void runCloudDemo(View view) {
+        statusText.setText("Queuing cloud demo...");
+        executor.execute(() -> {
+            try {
+                URL url = new URL(API_BASE + "/api/demo/run");
+                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                connection.setConnectTimeout(3500);
+                connection.setReadTimeout(3500);
+                connection.setRequestMethod("POST");
+                int code = connection.getResponseCode();
+                main.post(() -> {
+                    if (code >= 200 && code < 300) {
+                        statusText.setText("Cloud demo queued.");
+                    } else {
+                        statusText.setText("Cloud demo rejected.");
+                    }
+                });
+                connection.disconnect();
+            } catch (Exception ex) {
+                main.post(() -> statusText.setText("Cannot reach cloud server."));
             }
         });
     }
