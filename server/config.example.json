@@ -1,0 +1,11 @@
+{
+  "host": "0.0.0.0",
+  "port": 8080,
+  "public_base_url": "http://31.76.20.227",
+  "latest_version_code": 1,
+  "latest_version_name": "1.0",
+  "apk_url": "http://31.76.20.227/downloads/app-debug.apk",
+  "release_notes": "Initial release",
+  "telegram_bot_token": "",
+  "telegram_admin_ids": []
+}

@@ -1,0 +1,14 @@
+[Unit]
+Description=Macro Controller API
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/macro-controller/server
+ExecStart=/usr/bin/python3 /opt/macro-controller/server/app.py
+Restart=always
+RestartSec=3
+User=macroctl
+Group=macroctl
+
+[Install]
+WantedBy=multi-user.target
