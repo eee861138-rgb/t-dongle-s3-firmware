@@ -2,10 +2,10 @@
   "host": "0.0.0.0",
   "port": 8080,
   "public_base_url": "http://31.76.20.227",
-  "latest_version_code": 3,
-  "latest_version_name": "1.2",
+  "latest_version_code": 4,
+  "latest_version_name": "1.3",
   "apk_url": "http://31.76.20.227/downloads/app-debug.apk",
-  "release_notes": "Cloud fixed demo command and dongle polling",
+  "release_notes": "Android Wi-Fi setup controls and clearer cloud demo status",
   "telegram_bot_token": "",
   "telegram_admin_ids": []
 }

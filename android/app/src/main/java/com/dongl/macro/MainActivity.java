@@ -21,14 +21,19 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 public class MainActivity extends Activity {
-    private static final int VERSION_CODE = 3;
-    private static final String VERSION_NAME = "1.2";
+    private static final int VERSION_CODE = 4;
+    private static final String VERSION_NAME = "1.3";
     private static final String API_BASE = "http://31.76.20.227";
     private static final String NOTEPAD_DUCKY =
             "DELAY 1000\n" +
@@ -57,6 +62,8 @@ public class MainActivity extends Activity {
         }
     };
     private EditText hostInput;
+    private EditText ssidInput;
+    private EditText wifiPassInput;
     private EditText macroInput;
     private TextView statusText;
     private String deviceId;
@@ -124,6 +131,40 @@ public class MainActivity extends Activity {
         cloudDemo.setTextSize(18);
         cloudDemo.setOnClickListener(this::runCloudDemo);
         root.addView(cloudDemo, new LinearLayout.LayoutParams(-1, -2));
+
+        TextView wifiTitle = new TextView(this);
+        wifiTitle.setText("Wi-Fi");
+        wifiTitle.setTextSize(18);
+        wifiTitle.setTextColor(0xFF17301C);
+        wifiTitle.setPadding(0, 18, 0, 8);
+        root.addView(wifiTitle, new LinearLayout.LayoutParams(-1, -2));
+
+        ssidInput = new EditText(this);
+        ssidInput.setSingleLine(true);
+        ssidInput.setHint("Network name");
+        root.addView(ssidInput, new LinearLayout.LayoutParams(-1, -2));
+
+        wifiPassInput = new EditText(this);
+        wifiPassInput.setSingleLine(true);
+        wifiPassInput.setHint("Password");
+        root.addView(wifiPassInput, new LinearLayout.LayoutParams(-1, -2));
+
+        LinearLayout wifiButtons = new LinearLayout(this);
+        wifiButtons.setOrientation(LinearLayout.HORIZONTAL);
+        wifiButtons.setPadding(0, 8, 0, 0);
+        root.addView(wifiButtons, new LinearLayout.LayoutParams(-1, -2));
+
+        Button scanWifi = makeButton("Scan Wi-Fi");
+        scanWifi.setOnClickListener(this::scanWifi);
+        wifiButtons.addView(scanWifi, new LinearLayout.LayoutParams(0, -2, 1));
+
+        Button connectWifi = makeButton("Connect");
+        connectWifi.setOnClickListener(this::connectWifi);
+        wifiButtons.addView(connectWifi, new LinearLayout.LayoutParams(0, -2, 1));
+
+        Button resetWifi = makeButton("Reset");
+        resetWifi.setOnClickListener(this::resetWifi);
+        wifiButtons.addView(resetWifi, new LinearLayout.LayoutParams(0, -2, 1));
 
         ScrollView scroll = new ScrollView(this);
         scroll.addView(root);
@@ -295,9 +336,13 @@ public class MainActivity extends Activity {
                 connection.setReadTimeout(3500);
                 connection.setRequestMethod("POST");
                 int code = connection.getResponseCode();
+                String body = code >= 200 && code < 300 ? readBody(connection.getInputStream()) : "";
                 main.post(() -> {
                     if (code >= 200 && code < 300) {
-                        statusText.setText("Cloud demo queued.");
+                        String device = stringJson(body, "device_id");
+                        statusText.setText(device.length() > 0
+                                ? "Cloud demo queued for " + device + "."
+                                : "Cloud demo queued. Dongle must be online.");
                     } else {
                         statusText.setText("Cloud demo rejected.");
                     }
@@ -305,6 +350,136 @@ public class MainActivity extends Activity {
                 connection.disconnect();
             } catch (Exception ex) {
                 main.post(() -> statusText.setText("Cannot reach cloud server."));
+            }
+        });
+    }
+
+    private String dongleBaseUrl() {
+        String host = hostInput.getText().toString().trim();
+        if (host.length() == 0) host = "172.0.0.1";
+        if (host.startsWith("http://") || host.startsWith("https://")) {
+            return host;
+        }
+        return "http://" + host;
+    }
+
+    private void scanWifi(View view) {
+        statusText.setText("Scanning Wi-Fi...");
+        executor.execute(() -> {
+            try {
+                URL url = new URL(dongleBaseUrl() + "/wifi/scan");
+                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                connection.setConnectTimeout(6000);
+                connection.setReadTimeout(10000);
+                int code = connection.getResponseCode();
+                String body = code >= 200 && code < 300 ? readBody(connection.getInputStream()) : "";
+                connection.disconnect();
+                if (code < 200 || code >= 300) {
+                    main.post(() -> statusText.setText("Wi-Fi scan failed."));
+                    return;
+                }
+                ArrayList<String> names = parseWifiNames(body);
+                main.post(() -> showWifiList(names));
+            } catch (Exception ex) {
+                main.post(() -> statusText.setText("Cannot scan. Connect phone to DONGL first."));
+            }
+        });
+    }
+
+    private ArrayList<String> parseWifiNames(String body) throws Exception {
+        ArrayList<String> names = new ArrayList<>();
+        JSONObject root = new JSONObject(body);
+        JSONArray networks = root.optJSONArray("networks");
+        if (networks == null) return names;
+        for (int i = 0; i < networks.length(); i++) {
+            JSONObject item = networks.optJSONObject(i);
+            if (item == null) continue;
+            String ssid = item.optString("ssid", "");
+            if (ssid.length() > 0 && !names.contains(ssid)) {
+                int rssi = item.optInt("rssi", 0);
+                names.add(rssi == 0 ? ssid : ssid + " (" + rssi + " dBm)");
+            }
+        }
+        return names;
+    }
+
+    private void showWifiList(ArrayList<String> names) {
+        if (names.isEmpty()) {
+            statusText.setText("No Wi-Fi networks found.");
+            return;
+        }
+        String[] items = names.toArray(new String[0]);
+        new AlertDialog.Builder(this)
+                .setTitle("Choose Wi-Fi")
+                .setItems(items, (dialog, which) -> {
+                    String selected = items[which].replaceFirst(" \\(-?\\d+ dBm\\)$", "");
+                    ssidInput.setText(selected);
+                    statusText.setText("Selected " + selected + ". Enter password and tap Connect.");
+                })
+                .show();
+        statusText.setText("Found " + names.size() + " networks.");
+    }
+
+    private void connectWifi(View view) {
+        String ssid = ssidInput.getText().toString().trim();
+        String pass = wifiPassInput.getText().toString();
+        if (ssid.length() == 0) {
+            statusText.setText("Enter or scan Wi-Fi name first.");
+            return;
+        }
+        statusText.setText("Connecting dongle to Wi-Fi...");
+        executor.execute(() -> {
+            try {
+                String body = "ssid=" + URLEncoder.encode(ssid, "UTF-8") +
+                        "&pass=" + URLEncoder.encode(pass, "UTF-8");
+                URL url = new URL(dongleBaseUrl() + "/wifi/connect");
+                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                connection.setConnectTimeout(5000);
+                connection.setReadTimeout(15000);
+                connection.setRequestMethod("POST");
+                connection.setDoOutput(true);
+                connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=utf-8");
+                byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+                connection.setFixedLengthStreamingMode(bytes.length);
+                try (OutputStream out = connection.getOutputStream()) {
+                    out.write(bytes);
+                }
+                int code = connection.getResponseCode();
+                String response = code >= 200 && code < 300 ? readBody(connection.getInputStream()) : "";
+                connection.disconnect();
+                main.post(() -> {
+                    if (code >= 200 && code < 300) {
+                        String ip = stringJson(response, "ip");
+                        if (ip.length() > 0) hostInput.setText(ip);
+                        statusText.setText(ip.length() > 0
+                                ? "Dongle connected. New IP: " + ip
+                                : "Dongle connected. Cloud control should work now.");
+                    } else {
+                        statusText.setText("Wi-Fi connect failed. Check password.");
+                    }
+                });
+            } catch (Exception ex) {
+                main.post(() -> statusText.setText("Cannot connect Wi-Fi. Stay on DONGL during setup."));
+            }
+        });
+    }
+
+    private void resetWifi(View view) {
+        statusText.setText("Resetting dongle Wi-Fi...");
+        executor.execute(() -> {
+            try {
+                URL url = new URL(dongleBaseUrl() + "/wifi/reset");
+                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                connection.setConnectTimeout(3500);
+                connection.setReadTimeout(3500);
+                connection.setRequestMethod("POST");
+                int code = connection.getResponseCode();
+                connection.disconnect();
+                main.post(() -> statusText.setText(code >= 200 && code < 300
+                        ? "Wi-Fi reset. Reconnect phone to DONGL."
+                        : "Wi-Fi reset failed."));
+            } catch (Exception ex) {
+                main.post(() -> statusText.setText("Cannot reach dongle for reset."));
             }
         });
     }

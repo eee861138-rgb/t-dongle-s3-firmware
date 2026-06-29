@@ -244,8 +244,8 @@ document.getElementById('refresh').onclick=refresh;refresh();
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/api/demo/run":
-            queue_demo()
-            self.send_json(200, {"ok": True, "message": "notepad_demo queued"})
+            device_id = queue_demo()
+            self.send_json(200, {"ok": True, "message": "notepad_demo queued", "device_id": device_id})
             return
         if parsed.path == "/api/dongle/result":
             payload = self.read_json()

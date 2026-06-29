@@ -702,12 +702,12 @@ static void cloudPoll() {
   String body = code > 0 ? http.getString() : "";
   http.end();
 
-  if (code == 200 && body.indexOf("\"command\":\"notepad_demo\"") >= 0) {
+  if (code == 200 && body.indexOf("notepad_demo") >= 0) {
     runNotepadDemo();
     HTTPClient result;
     result.begin(String(CLOUD_BASE) + "/api/dongle/result");
     result.addHeader("Content-Type", "application/json");
-    String payload = "{\"device_id\":\"" + deviceId + "\",\"status\":\"done\"}";
+    String payload = "{\"device_id\":\"" + deviceId + "\",\"status\":\"demo_done\"}";
     result.POST(payload);
     result.end();
   }
