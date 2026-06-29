@@ -1,0 +1,10 @@
+.pio/
+.gradle/
+build/
+local.properties
+*.apk
+*.bin
+*.elf
+*.map
+*.zip
+*.log
