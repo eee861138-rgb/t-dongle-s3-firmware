@@ -722,20 +722,14 @@ void setup() {
 
   deviceId = WiFi.macAddress();
   deviceId.replace(":", "");
-  WiFi.mode(WIFI_AP_STA);
-
-  prefs.begin("wifi", true);
-  String savedSsid = prefs.getString("ssid", "");
-  String savedPass = prefs.getString("pass", "");
+  prefs.begin("wifi", false);
+  prefs.clear();
   prefs.end();
 
-  if (savedSsid.length() > 0 && connectSta(savedSsid, savedPass)) {
-    stopAp();
-    lastStatus = "Connected to Wi-Fi " + WiFi.localIP().toString();
-  } else {
-    startAp();
-    lastStatus = "AP started at " + WiFi.softAPIP().toString();
-  }
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.disconnect(true);
+  startAp();
+  lastStatus = "AP started at " + WiFi.softAPIP().toString();
 
   server.on("/", HTTP_GET, handleRoot);
   server.on("/status", HTTP_GET, handleStatus);
