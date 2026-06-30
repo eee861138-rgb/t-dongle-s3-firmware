@@ -255,6 +255,7 @@ public class MainActivity extends Activity {
     }
 
     private String readBody(InputStream input) throws Exception {
+        if (input == null) return "";
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         byte[] chunk = new byte[1024];
         int read;
@@ -330,14 +331,18 @@ public class MainActivity extends Activity {
                 connection.setRequestMethod("POST");
                 connection.setDoOutput(true);
                 connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-                String payload = "{\"macro\":\"" + jsonEscape(macro) + "\"}";
+                JSONObject payloadJson = new JSONObject();
+                payloadJson.put("macro", macro);
+                String payload = payloadJson.toString();
                 byte[] bytes = payload.getBytes(StandardCharsets.UTF_8);
                 connection.setFixedLengthStreamingMode(bytes.length);
                 try (OutputStream out = connection.getOutputStream()) {
                     out.write(bytes);
                 }
                 int code = connection.getResponseCode();
-                String body = code >= 200 && code < 300 ? readBody(connection.getInputStream()) : "";
+                String body = code >= 200 && code < 300
+                        ? readBody(connection.getInputStream())
+                        : readBody(connection.getErrorStream());
                 main.post(() -> {
                     if (code >= 200 && code < 300) {
                         String device = stringJson(body, "device_id");
@@ -345,7 +350,10 @@ public class MainActivity extends Activity {
                                 ? "Cloud macro queued for " + device + "."
                                 : "Cloud macro queued. Dongle must be online.");
                     } else {
-                        statusText.setText("Cloud macro rejected. Check allowed commands.");
+                        String error = stringJson(body, "error");
+                        statusText.setText(error.length() > 0
+                                ? "Cloud rejected: " + error
+                                : "Cloud macro rejected. Check allowed commands.");
                     }
                 });
                 connection.disconnect();
@@ -353,13 +361,6 @@ public class MainActivity extends Activity {
                 main.post(() -> statusText.setText("Cannot reach cloud server."));
             }
         });
-    }
-
-    private String jsonEscape(String value) {
-        return value.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\r", "\\r")
-                .replace("\n", "\\n");
     }
 
     private String dongleBaseUrl() {

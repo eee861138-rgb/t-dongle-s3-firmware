@@ -55,30 +55,38 @@ The dongle polls the VPS when it is connected to external Wi-Fi.
 Server base URL in firmware:
 http://31.76.20.227
 
-Allowed cloud macro commands:
-Cloud, APK, and local web UI all send macro text, but it must pass the same
-strict allowlist in server/app.py and firmware/src/main.cpp.
+Cloud macro policy:
+Allowed and blocked cloud macro policy is now centralized in:
+macro_policy.json
 
-Allowed example:
-DELAY 1000
-GUI r
-DELAY 500
-STRING notepad
-DELAY 200
-ENTER
-DELAY 1000
+Server reads it at startup from:
+/opt/macro-controller/macro_policy.json
 
-Allowed commands only:
-- DELAY 0-5000
+Local server default path:
+server/app.py reads ../macro_policy.json
+
+Firmware build generates this header from macro_policy.json:
+firmware/src/macro_policy_generated.h
+
+Generator script:
+scripts/generate_macro_policy.py
+
+PlatformIO runs the generator before build through firmware/platformio.ini.
+
+Current allowed cloud macro families:
+- DELAY
 - GUI r
-- STRING text, up to 160 characters and blocked-word checked
+- STRING text, length-limited and blocked-word checked
 - ENTER
+- TAB, SHIFT TAB, ESC, BACKSPACE, DELETE
+- UP, DOWN, LEFT, RIGHT
+- F1-F12
+- CTRL A/C/F/S/V/X/Z
+- ALT TAB
 
-Blocked examples:
-HOTKEY, TYPE, REPEAT, TAB, ESC, BACKSPACE, CTRL, ALT, SHIFT, WIN, META,
-COMMAND, DEFAULT_DELAY, DEFAULT_CHAR_DELAY, arrows, function keys, numpad keys.
+Blocked words inside STRING are also in macro_policy.json.
 
-Build and upload firmware
+
 -------------------------
 From:
 C:\Users\ebelk\Downloads\Новая папка\git-upload-sources\firmware

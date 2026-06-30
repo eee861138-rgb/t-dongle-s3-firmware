@@ -5,12 +5,12 @@
 #include <USBHIDKeyboard.h>
 #include <WiFi.h>
 #include <WebServer.h>
+#include "macro_policy_generated.h"
 
 USBHIDKeyboard Keyboard;
 WebServer server(80);
 Preferences prefs;
 
-static const size_t MAX_MACRO_BYTES = 2048;
 static const uint16_t DEFAULT_LINE_DELAY_MS = 80;
 static const uint16_t DEFAULT_CHAR_DELAY_MS = 20;
 static IPAddress AP_IP(172, 0, 0, 1);
@@ -110,11 +110,8 @@ static String trimCopy(String value) {
 static bool isDangerousText(const String &text) {
   String lower = text;
   lower.toLowerCase();
-  const char *blocked[] = {
-    "powershell", "cmd.exe", "terminal", "curl ", "wget ", "http://", "https://",
-    "reg add", "del ", "format ", "shutdown", "net user", "sudo ", "bash "
-  };
-  for (const char *word : blocked) {
+  for (size_t i = 0; i < MACRO_POLICY_BLOCKED_TEXT_COUNT; i++) {
+    const char *word = MACRO_POLICY_BLOCKED_TEXT[i];
     if (lower.indexOf(word) >= 0) {
       return true;
     }
@@ -192,8 +189,25 @@ static bool validateKeyCombo(const String &line) {
   return parts >= 1 && nonModifiers <= 6;
 }
 
+static bool isAllowedCloudKeyCombo(const String &line) {
+  String combo = line;
+  combo.toUpperCase();
+  combo.trim();
+  while (combo.indexOf("  ") >= 0) {
+    combo.replace("  ", " ");
+  }
+
+  for (size_t i = 0; i < MACRO_POLICY_ALLOWED_KEY_LINES_COUNT; i++) {
+    if (combo == MACRO_POLICY_ALLOWED_KEY_LINES[i]) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 static bool validateMacro(const String &macro, ParseError &error) {
-  if (macro.length() == 0 || macro.length() > MAX_MACRO_BYTES) {
+  if (macro.length() == 0 || macro.length() > MACRO_POLICY_MAX_MACRO_BYTES) {
     error.line = 0;
     error.message = "Macro must be 1-2048 bytes";
     return false;
@@ -213,20 +227,19 @@ static bool validateMacro(const String &macro, ParseError &error) {
 
       if (upper.startsWith("STRING ")) {
         String text = line.substring(7);
-        if (text.length() > 160 || isDangerousText(text)) {
+        if (text.length() > MACRO_POLICY_MAX_STRING_CHARS || isDangerousText(text)) {
           error = {lineNo, "STRING text is too long or blocked"};
           return false;
         }
       } else if (upper.startsWith("DELAY ")) {
         int ms = line.substring(6).toInt();
-        if (ms < 0 || ms > 5000) {
-          error = {lineNo, "DELAY must be 0-5000 ms"};
+        if (ms < 0 || ms > MACRO_POLICY_MAX_DELAY_MS) {
+          error = {lineNo, "DELAY is out of allowed range"};
           return false;
         }
-      } else if (upper == "GUI R") {
-      } else if (upper == "ENTER") {
+      } else if (isAllowedCloudKeyCombo(line)) {
       } else {
-        error = {lineNo, "Command is not allowed. Allowed: DELAY, GUI r, STRING, ENTER"};
+        error = {lineNo, "Command is not allowed"};
         return false;
       }
     }
@@ -353,10 +366,8 @@ static bool executeMacroLine(const String &line, int &lineDelay, int &charDelay)
     typeText(line.substring(7), charDelay);
   } else if (upper.startsWith("DELAY ")) {
     delay(line.substring(6).toInt());
-  } else if (upper == "GUI R") {
-    pressKeyCombo("GUI r");
-  } else if (upper == "ENTER") {
-    pressKeyCombo("ENTER");
+  } else {
+    pressKeyCombo(line);
   }
   delay(lineDelay);
   return true;

@@ -11,49 +11,31 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 DB_PATH = ROOT / "data.sqlite3"
 CONFIG_PATH = ROOT / "config.json"
+POLICY_PATH = Path(os.environ.get("MACRO_POLICY_PATH", ROOT.parent / "macro_policy.json"))
 DOWNLOADS = ROOT / "downloads"
 DEFAULT_MACRO = "DELAY 1000\nGUI r\nDELAY 500\nSTRING notepad\nDELAY 200\nENTER\nDELAY 1000"
-ALLOWED_COMMANDS = ("DELAY", "GUI r", "STRING", "ENTER")
-BLOCKED_COMMANDS = (
-    "HOTKEY",
-    "TYPE",
-    "TAB",
-    "ESC",
-    "BACKSPACE",
-    "CTRL",
-    "ALT",
-    "SHIFT",
-    "WIN",
-    "WINDOWS",
-    "META",
-    "COMMAND",
-    "DEFAULT_DELAY",
-    "DEFAULT_CHAR_DELAY",
-    "REPEAT",
-    "DELETE",
-    "INSERT",
-    "HOME",
-    "END",
-    "ARROWS",
-    "F1-F24",
-    "NUMPAD",
-)
-BLOCKED_TEXT = (
-    "powershell",
-    "cmd.exe",
-    "terminal",
-    "curl ",
-    "wget ",
-    "http://",
-    "https://",
-    "reg add",
-    "del ",
-    "format ",
-    "shutdown",
-    "net user",
-    "sudo ",
-    "bash ",
-)
+
+
+def load_macro_policy():
+    with POLICY_PATH.open("r", encoding="utf-8") as f:
+        policy = json.load(f)
+    limits = policy.setdefault("limits", {})
+    limits.setdefault("max_macro_bytes", 2048)
+    limits.setdefault("max_string_chars", 160)
+    limits.setdefault("max_delay_ms", 5000)
+    policy.setdefault("allowed_commands", [])
+    policy.setdefault("blocked_commands", [])
+    policy.setdefault("blocked_text", [])
+    policy.setdefault("allowed_key_lines", [])
+    return policy
+
+
+MACRO_POLICY = load_macro_policy()
+LIMITS = MACRO_POLICY["limits"]
+ALLOWED_COMMANDS = tuple(MACRO_POLICY["allowed_commands"])
+BLOCKED_COMMANDS = tuple(MACRO_POLICY["blocked_commands"])
+BLOCKED_TEXT = tuple(MACRO_POLICY["blocked_text"])
+ALLOWED_KEY_LINES = {" ".join(line.upper().split()) for line in MACRO_POLICY["allowed_key_lines"]}
 
 
 def load_config():
@@ -164,8 +146,16 @@ def dongle_stats():
     ]
 
 
+def is_allowed_key_line(line):
+    normalized = " ".join(line.upper().split())
+    return normalized in ALLOWED_KEY_LINES
+
+
 def validate_macro(macro):
-    if not macro or len(macro.encode("utf-8")) > 2048:
+    max_macro_bytes = int(LIMITS["max_macro_bytes"])
+    max_string_chars = int(LIMITS["max_string_chars"])
+    max_delay_ms = int(LIMITS["max_delay_ms"])
+    if not macro or len(macro.encode("utf-8")) > max_macro_bytes:
         return False, "Macro must be 1-2048 bytes"
     for line_no, raw in enumerate(macro.splitlines(), 1):
         line = raw.strip()
@@ -175,15 +165,13 @@ def validate_macro(macro):
         if upper.startswith("STRING "):
             text = line[7:]
             lower = text.lower()
-            if len(text) > 160 or any(word in lower for word in BLOCKED_TEXT):
+            if len(text) > max_string_chars or any(word in lower for word in BLOCKED_TEXT):
                 return False, f"Line {line_no}: STRING text is too long or blocked"
         elif upper.startswith("DELAY "):
             value = line[6:].strip()
-            if not value.isdigit() or int(value) > 5000:
-                return False, f"Line {line_no}: DELAY must be 0-5000 ms"
-        elif upper == "GUI R":
-            pass
-        elif upper == "ENTER":
+            if not value.isdigit() or int(value) > max_delay_ms:
+                return False, f"Line {line_no}: DELAY is out of allowed range"
+        elif is_allowed_key_line(line):
             pass
         else:
             return False, f"Line {line_no}: command is not allowed"
