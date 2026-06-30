@@ -220,7 +220,7 @@ class Api(BaseHTTPRequestHandler):
         return json.loads(body)
 
     def send_json(self, code, value):
-        body = json.dumps(value, ensure_ascii=False).encode("utf-8")
+        body = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Access-Control-Allow-Origin", "*")

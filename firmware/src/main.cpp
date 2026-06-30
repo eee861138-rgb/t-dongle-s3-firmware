@@ -588,10 +588,15 @@ static void handleMacro() {
 }
 
 static String jsonStringValue(const String &body, const String &key) {
-  String marker = "\"" + key + "\":\"";
+  String marker = "\"" + key + "\":";
   int start = body.indexOf(marker);
   if (start < 0) return "";
   start += marker.length();
+  while (start < body.length() && body[start] == ' ') {
+    start++;
+  }
+  if (start >= body.length() || body[start] != '"') return "";
+  start++;
   String out;
   bool escaped = false;
   for (int i = start; i < body.length(); i++) {
