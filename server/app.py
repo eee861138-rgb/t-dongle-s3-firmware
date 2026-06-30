@@ -1,3 +1,5 @@
+import base64
+import hmac
 import json
 import os
 import sqlite3
@@ -42,6 +44,12 @@ ALLOWED_KEY_LINES = {" ".join(line.upper().split()) for line in MACRO_POLICY["al
 def load_config():
     with CONFIG_PATH.open("r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def admin_credentials(config):
+    username = os.environ.get("ADMIN_USERNAME") or config.get("admin_username", "")
+    password = os.environ.get("ADMIN_PASSWORD") or config.get("admin_password", "")
+    return str(username), str(password)
 
 
 def db():
@@ -273,6 +281,43 @@ class Api(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def require_admin_auth(self, config):
+        username, password = admin_credentials(config)
+        if not username or not password:
+            return True
+
+        header = self.headers.get("Authorization", "")
+        prefix = "Basic "
+        if not header.startswith(prefix):
+            self.send_admin_auth_required()
+            return False
+
+        try:
+            decoded = base64.b64decode(header[len(prefix):], validate=True).decode("utf-8")
+        except Exception:
+            self.send_admin_auth_required()
+            return False
+
+        sent_username, sep, sent_password = decoded.partition(":")
+        if sep != ":":
+            self.send_admin_auth_required()
+            return False
+
+        if hmac.compare_digest(sent_username, username) and hmac.compare_digest(sent_password, password):
+            return True
+
+        self.send_admin_auth_required()
+        return False
+
+    def send_admin_auth_required(self):
+        body = b"Authentication required"
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="Macro Controller Admin"')
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         config = load_config()
         parsed = urllib.parse.urlparse(self.path)
@@ -295,6 +340,8 @@ class Api(BaseHTTPRequestHandler):
         elif parsed.path == "/api/layout/status":
             self.handle_layout_status(parsed)
         elif parsed.path == "/admin":
+            if not self.require_admin_auth(config):
+                return
             self.serve_admin()
         elif parsed.path.startswith("/downloads/"):
             self.serve_download(parsed.path.removeprefix("/downloads/"))

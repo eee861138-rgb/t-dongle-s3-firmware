@@ -6,6 +6,8 @@
   "latest_version_name": "1.3",
   "apk_url": "http://31.76.20.227/downloads/app-debug.apk",
   "release_notes": "Android Wi-Fi setup controls and clearer cloud demo status",
+  "admin_username": "",
+  "admin_password": "",
   "telegram_bot_token": "",
   "telegram_admin_ids": []
 }
