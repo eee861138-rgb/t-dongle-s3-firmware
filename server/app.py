@@ -14,6 +14,7 @@ CONFIG_PATH = ROOT / "config.json"
 POLICY_PATH = Path(os.environ.get("MACRO_POLICY_PATH", ROOT.parent / "macro_policy.json"))
 DOWNLOADS = ROOT / "downloads"
 DEFAULT_MACRO = "DELAY 1000\nGUI r\nDELAY 500\nSTRING notepad\nDELAY 200\nENTER\nDELAY 1000"
+SUPPORTED_LAYOUTS = {"RU", "ENG"}
 
 
 def load_macro_policy():
@@ -103,6 +104,15 @@ def init_db():
             )
             """
         )
+        conn.execute(
+            """
+            create table if not exists host_layouts (
+              device_id text primary key,
+              layout text not null,
+              updated_at integer not null
+            )
+            """
+        )
 
 
 def now():
@@ -133,7 +143,12 @@ def dongle_stats():
     cutoff = now() - 10
     with db() as conn:
         rows = conn.execute(
-            "select device_id, first_seen, last_seen, last_status from dongles order by last_seen desc"
+            """
+            select d.device_id, d.first_seen, d.last_seen, d.last_status, h.layout, h.updated_at as layout_updated_at
+            from dongles d
+            left join host_layouts h on h.device_id = d.device_id
+            order by d.last_seen desc
+            """
         ).fetchall()
     return [
         {
@@ -141,9 +156,51 @@ def dongle_stats():
             "online": row["last_seen"] >= cutoff,
             "last_seen": row["last_seen"],
             "last_status": row["last_status"] or "",
+            "layout": row["layout"] or "",
+            "layout_updated_at": row["layout_updated_at"] or 0,
         }
         for row in rows
     ]
+
+
+def normalize_layout(value):
+    layout = str(value or "").strip().upper()
+    if layout in ("EN", "US", "USA", "ENGLISH"):
+        layout = "ENG"
+    if layout not in SUPPORTED_LAYOUTS:
+        raise ValueError("layout must be RU or ENG")
+    return layout
+
+
+def update_host_layout(layout, device_id="default"):
+    layout = normalize_layout(layout)
+    device_id = str(device_id or "default")[:80]
+    t = now()
+    with db() as conn:
+        conn.execute(
+            """
+            insert into host_layouts(device_id, layout, updated_at) values(?, ?, ?)
+            on conflict(device_id) do update set layout = excluded.layout, updated_at = excluded.updated_at
+            """,
+            (device_id, layout, t),
+        )
+    return {"layout": layout, "device_id": device_id, "updated_at": t}
+
+
+def latest_host_layout(conn, device_id):
+    row = conn.execute(
+        "select layout, updated_at from host_layouts where device_id = ?",
+        (device_id,),
+    ).fetchone()
+    if not row:
+        row = conn.execute(
+            "select layout, updated_at from host_layouts where device_id = 'default'",
+        ).fetchone()
+    if not row:
+        return "", 0
+    if row["updated_at"] < now() - 10:
+        return "", row["updated_at"]
+    return row["layout"], row["updated_at"]
 
 
 def is_allowed_key_line(line):
@@ -235,6 +292,8 @@ class Api(BaseHTTPRequestHandler):
             self.send_json(200, {"ok": True, "dongles": dongle_stats()})
         elif parsed.path == "/api/dongle/poll":
             self.handle_dongle_poll(parsed)
+        elif parsed.path == "/api/layout/status":
+            self.handle_layout_status(parsed)
         elif parsed.path == "/admin":
             self.serve_admin()
         elif parsed.path.startswith("/downloads/"):
@@ -288,9 +347,18 @@ document.getElementById('refresh').onclick=refresh;refresh();
             ).fetchone()
             if cmd:
                 conn.execute("update dongle_commands set status = 'sent', updated_at = ? where id = ?", (t, cmd["id"]))
-                self.send_json(200, {"ok": True, "id": cmd["id"], "command": cmd["command"]})
+                layout, layout_updated_at = latest_host_layout(conn, device_id)
+                self.send_json(200, {"ok": True, "id": cmd["id"], "command": cmd["command"], "layout": layout, "layout_updated_at": layout_updated_at})
             else:
-                self.send_json(200, {"ok": True, "command": ""})
+                layout, layout_updated_at = latest_host_layout(conn, device_id)
+                self.send_json(200, {"ok": True, "command": "", "layout": layout, "layout_updated_at": layout_updated_at})
+
+    def handle_layout_status(self, parsed):
+        qs = urllib.parse.parse_qs(parsed.query)
+        device_id = (qs.get("device_id", ["default"])[0] or "default")[:80]
+        with db() as conn:
+            layout, layout_updated_at = latest_host_layout(conn, device_id)
+        self.send_json(200, {"ok": True, "device_id": device_id, "layout": layout, "layout_updated_at": layout_updated_at})
 
     def serve_download(self, name):
         safe_name = Path(name).name
@@ -325,6 +393,14 @@ document.getElementById('refresh').onclick=refresh;refresh();
             with db() as conn:
                 conn.execute("update dongles set last_status = ?, last_seen = ? where device_id = ?", (status, now(), device_id))
             self.send_json(200, {"ok": True})
+            return
+        if parsed.path == "/api/layout/update":
+            try:
+                payload = self.read_json()
+                result = update_host_layout(payload.get("layout"), payload.get("device_id") or "default")
+                self.send_json(200, {"ok": True, **result})
+            except Exception as exc:
+                self.send_json(400, {"ok": False, "error": str(exc)})
             return
         if parsed.path not in ("/api/register", "/api/heartbeat"):
             self.send_json(404, {"error": "not found"})

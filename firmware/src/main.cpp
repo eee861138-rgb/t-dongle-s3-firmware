@@ -18,12 +18,13 @@ static IPAddress AP_GATEWAY(172, 0, 0, 1);
 static IPAddress AP_SUBNET(255, 255, 255, 0);
 static const char *CLOUD_BASE = "http://31.76.20.227";
 static const uint32_t CLOUD_POLL_MS = 2000;
-
 String lastStatus = "Ready";
 bool apRunning = false;
 bool staConnected = false;
 String deviceId;
 uint32_t lastCloudPoll = 0;
+String hostLayout = "UNKNOWN";
+uint32_t lastHostLayoutUpdate = 0;
 
 struct ParseError {
   int line;
@@ -206,6 +207,24 @@ static bool isAllowedCloudKeyCombo(const String &line) {
   return false;
 }
 
+static bool normalizeLayout(String value, String &layout) {
+  value.toUpperCase();
+  value.trim();
+  if (value == "EN" || value == "US" || value == "USA" || value == "ENGLISH") {
+    value = "ENG";
+  }
+  if (value != "RU" && value != "ENG") {
+    return false;
+  }
+  layout = value;
+  return true;
+}
+
+static void rememberHostLayout(const String &layout) {
+  hostLayout = layout;
+  lastHostLayoutUpdate = millis();
+}
+
 static bool validateMacro(const String &macro, ParseError &error) {
   if (macro.length() == 0 || macro.length() > MACRO_POLICY_MAX_MACRO_BYTES) {
     error.line = 0;
@@ -348,6 +367,20 @@ static void pressKeyCombo(const String &value) {
   Keyboard.releaseAll();
 }
 
+static void ensureHostLayout(const String &targetLayout) {
+  if (hostLayout != "RU" && hostLayout != "ENG") {
+    lastStatus = "Host layout unknown for " + targetLayout;
+    return;
+  }
+  if (hostLayout == targetLayout) {
+    return;
+  }
+  pressKeyCombo("GUI SPACE");
+  delay(250);
+  rememberHostLayout(targetLayout);
+  lastStatus = "Switched host layout to " + targetLayout;
+}
+
 static void typeText(const String &text, uint16_t charDelay) {
   for (size_t i = 0; i < text.length(); i++) {
     Keyboard.write(text[i]);
@@ -366,6 +399,8 @@ static bool executeMacroLine(const String &line, int &lineDelay, int &charDelay)
     typeText(line.substring(7), charDelay);
   } else if (upper.startsWith("DELAY ")) {
     delay(line.substring(6).toInt());
+  } else if (upper == "RU" || upper == "ENG") {
+    ensureHostLayout(upper);
   } else {
     pressKeyCombo(line);
   }
@@ -532,9 +567,23 @@ static void handleStatus() {
   String body = String("{\"ok\":true,\"pending\":false") +
                 ",\"status\":\"" + jsonEscape(lastStatus) + "\",\"ssid\":\"" SAFE_MACRO_AP_SSID "\"" +
                 ",\"device_id\":\"" + jsonEscape(deviceId) + "\"" +
+                ",\"layout\":\"" + jsonEscape(hostLayout) + "\"" +
                 ",\"sta_connected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") +
                 ",\"sta_ip\":\"" + (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "") + "\"}";
   sendJson(200, body);
+}
+
+static void handleLayout() {
+  String raw = server.arg("layout");
+  if (raw.length() == 0) raw = server.arg("plain");
+  String layout;
+  if (!normalizeLayout(urlDecode(raw), layout)) {
+    sendJson(400, "{\"ok\":false,\"error\":\"layout must be RU or ENG\"}");
+    return;
+  }
+  rememberHostLayout(layout);
+  lastStatus = "Host layout " + layout;
+  sendJson(200, "{\"ok\":true,\"layout\":\"" + layout + "\"}");
 }
 
 static void handleWifiScan() {
@@ -642,6 +691,10 @@ static void cloudPoll() {
   http.end();
 
   String macro = jsonStringValue(body, "command");
+  String layout;
+  if (normalizeLayout(jsonStringValue(body, "layout"), layout)) {
+    rememberHostLayout(layout);
+  }
   if (code == 200 && macro.length() > 0) {
     ParseError error;
     if (validateMacro(macro, error)) {
@@ -682,6 +735,8 @@ void setup() {
   server.on("/wifi/scan", HTTP_GET, handleWifiScan);
   server.on("/wifi/connect", HTTP_POST, handleWifiConnect);
   server.on("/wifi/reset", HTTP_POST, handleWifiReset);
+  server.on("/layout", HTTP_OPTIONS, handleOptions);
+  server.on("/layout", HTTP_POST, handleLayout);
   server.on("/macro", HTTP_OPTIONS, handleOptions);
   server.on("/macro", HTTP_POST, handleMacro);
   server.begin();
